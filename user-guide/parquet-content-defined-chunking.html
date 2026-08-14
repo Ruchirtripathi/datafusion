@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Features &#8212; Apache DataFusion  documentation</title>
+    <title>Parquet Content-Defined Chunking &#8212; Apache DataFusion  documentation</title>
   
   
   
@@ -42,13 +42,13 @@
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'user-guide/features';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'user-guide/parquet-content-defined-chunking';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
     <link rel="icon" href="../_static/favicon.svg"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Concepts, Readings, Events" href="concepts-readings-events.html" />
-    <link rel="prev" title="Example Usage" href="example-usage.html" />
+    <link rel="next" title="Metrics" href="metrics.html" />
+    <link rel="prev" title="Reading Explain Plans" href="explain-usage.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
@@ -249,7 +249,7 @@
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="introduction.html">Introduction</a></li>
 <li class="toctree-l1"><a class="reference internal" href="example-usage.html">Example Usage</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Features</a></li>
+<li class="toctree-l1"><a class="reference internal" href="features.html">Features</a></li>
 <li class="toctree-l1"><a class="reference internal" href="concepts-readings-events.html">Concepts, Readings, Events</a></li>
 
 
@@ -293,7 +293,7 @@
 
 
 <li class="toctree-l1"><a class="reference internal" href="explain-usage.html">Reading Explain Plans</a></li>
-<li class="toctree-l1"><a class="reference internal" href="parquet-content-defined-chunking.html">Parquet Content-Defined Chunking</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Parquet Content-Defined Chunking</a></li>
 <li class="toctree-l1"><a class="reference internal" href="metrics.html">Metrics</a></li>
 <li class="toctree-l1"><a class="reference internal" href="faq.html">Frequently Asked Questions</a></li>
 
@@ -409,7 +409,7 @@
         <i class="fa-solid fa-home"></i>
       </a>
     </li>
-    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Features</span></li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Parquet Content-Defined Chunking</span></li>
   </ul>
 </nav>
 </div>
@@ -444,129 +444,149 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="features">
-<h1>Features<a class="headerlink" href="#features" title="Link to this heading">#</a></h1>
-<section id="general">
-<h2>General<a class="headerlink" href="#general" title="Link to this heading">#</a></h2>
-<ul class="contains-task-list simple">
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">SQL Parser</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">SQL Query Planner</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">DataFrame API</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Parallel query execution</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Streaming Execution</p></li>
+<section id="parquet-content-defined-chunking">
+<h1>Parquet Content-Defined Chunking<a class="headerlink" href="#parquet-content-defined-chunking" title="Link to this heading">#</a></h1>
+<p>Content-defined chunking (CDC) is an experimental Parquet writer feature that
+makes data page boundaries depend on column values rather than fixed row or byte
+counts. This makes unchanged regions more likely to produce identical pages when
+closely related versions of a dataset are written with the same settings.</p>
+<p>CDC is useful when the resulting files are stored or transferred through a
+content-addressable or block-deduplicating system. Such a system can reuse the
+identical pages instead of storing or transferring them again. For example, a
+small insertion near the beginning of a dataset can change one page while later
+page boundaries converge back to those of the previous version.</p>
+<p>CDC does not itself deduplicate data or provide a page store. On a conventional
+filesystem or object store, each Parquet file is still stored in full. The output
+is a normal Parquet file and requires no CDC-specific reader support.</p>
+<section id="when-to-enable-cdc">
+<h2>When to enable CDC<a class="headerlink" href="#when-to-enable-cdc" title="Link to this heading">#</a></h2>
+<p>Consider CDC when all of the following apply:</p>
+<ul class="simple">
+<li><p>You regularly write similar versions of the same dataset.</p></li>
+<li><p>Your storage or transfer layer detects and reuses duplicate byte ranges.</p></li>
+<li><p>Reducing storage or network transfer is more important than maximizing write
+parallelism for an individual file.</p></li>
 </ul>
+<p>Leave CDC disabled for ordinary Parquet output unless you have measured a benefit
+in the system that stores or transfers the files. CDC is disabled by default.</p>
+<p>When CDC is enabled, DataFusion uses the sequential Arrow writer for each output
+file because the chunker’s state must persist across row groups. This can reduce
+write throughput compared with DataFusion’s parallel writer path. Writing
+different output files can still proceed concurrently.</p>
+<p>CDC operates independently for each output file. When <code class="docutils literal notranslate"><span class="pre">COPY</span></code> targets a
+directory, DataFusion distributes input RecordBatches in round-robin order across
+parallel output files; <code class="docutils literal notranslate"><span class="pre">datafusion.execution.minimum_parallel_output_files</span></code>
+defaults to four. If batching or file assignment changes between dataset
+versions, unchanged rows can move between files and reduce deduplication. For
+the best results, keep the input order and output file layout stable. Use a
+filename target for single-file output, or partition by stable keys when
+multiple files are required. See
+<a class="reference internal" href="configs.html#setting-configuration-options"><span class="std std-ref">Configuration Settings</span></a>.</p>
 </section>
-<section id="optimizations">
-<h2>Optimizations<a class="headerlink" href="#optimizations" title="Link to this heading">#</a></h2>
-<ul class="contains-task-list simple">
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Query Optimizer</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Constant folding</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Join Reordering</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Limit Pushdown</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Projection push down</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Predicate push down</p></li>
-</ul>
+<section id="enable-cdc-with-sql">
+<h2>Enable CDC with SQL<a class="headerlink" href="#enable-cdc-with-sql" title="Link to this heading">#</a></h2>
+<p>Set CDC for one <a class="reference internal" href="sql/dml.html#copy"><span class="std std-ref"><code class="docutils literal notranslate"><span class="pre">COPY</span></code></span></a> operation with Parquet format options.
+The filename target in this example selects single-file output:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">COPY</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="k">SELECT</span>
+<span class="w">        </span><span class="n">value</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">id</span><span class="p">,</span>
+<span class="w">        </span><span class="n">CONCAT</span><span class="p">(</span><span class="s1">&#39;event-&#39;</span><span class="p">,</span><span class="w"> </span><span class="k">CAST</span><span class="p">(</span><span class="n">value</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">))</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">event</span>
+<span class="w">    </span><span class="k">FROM</span><span class="w"> </span><span class="n">generate_series</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">100000</span><span class="p">)</span>
+<span class="p">)</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="s1">&#39;cdc-output.parquet&#39;</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
+<span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="s1">&#39;format.content_defined_chunking.enabled&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p>The default chunking parameters are a good starting point. The next example
+specifies those defaults explicitly for one write; it does not change their
+values:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">COPY</span><span class="w"> </span><span class="n">source_table</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="s1">&#39;cdc-output.parquet&#39;</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
+<span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="s1">&#39;format.content_defined_chunking.enabled&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;format.content_defined_chunking.min_chunk_size&#39;</span><span class="w"> </span><span class="s1">&#39;262144&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;format.content_defined_chunking.max_chunk_size&#39;</span><span class="w"> </span><span class="s1">&#39;1048576&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;format.content_defined_chunking.norm_level&#39;</span><span class="w"> </span><span class="s1">&#39;0&#39;</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p>Change these values only after measuring with representative data.</p>
+<p>You can instead enable CDC for subsequent Parquet writes in the session:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">parquet</span><span class="p">.</span><span class="n">content_defined_chunking</span><span class="p">.</span><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">true</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>The corresponding environment variable is
+<code class="docutils literal notranslate"><span class="pre">DATAFUSION_EXECUTION_PARQUET_CONTENT_DEFINED_CHUNKING_ENABLED</span></code>. See
+<a class="reference internal" href="configs.html#setting-configuration-options"><span class="std std-ref">Configuration Settings</span></a> for all ways
+to set session options.</p>
 </section>
-<section id="sql-support">
-<h2>SQL Support<a class="headerlink" href="#sql-support" title="Link to this heading">#</a></h2>
-<ul class="contains-task-list simple">
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Type coercion</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Projection (<code class="docutils literal notranslate"><span class="pre">SELECT</span></code>)</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Filter (<code class="docutils literal notranslate"><span class="pre">WHERE</span></code>)</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Filter post-aggregate (<code class="docutils literal notranslate"><span class="pre">HAVING</span></code>)</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Sorting (<code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code>)</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Limit (<code class="docutils literal notranslate"><span class="pre">LIMIT</span></code>)</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Aggregate (<code class="docutils literal notranslate"><span class="pre">GROUP</span> <span class="pre">BY</span></code>)</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">cast /try_cast</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox"><a class="reference external" href="https://www.postgresql.org/docs/current/queries-values.html"><code class="docutils literal notranslate"><span class="pre">VALUES</span></code> lists</a></p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox"><a class="reference internal" href="sql/scalar_functions.html#string-functions"><span class="std std-ref">String Functions</span></a></p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox"><a class="reference internal" href="sql/scalar_functions.html#conditional-functions"><span class="std std-ref">Conditional Functions</span></a></p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox"><a class="reference internal" href="sql/scalar_functions.html#time-and-date-functions"><span class="std std-ref">Time and Date Functions</span></a></p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox"><a class="reference internal" href="sql/scalar_functions.html#math-functions"><span class="std std-ref">Math Functions</span></a></p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox"><a class="reference internal" href="sql/aggregate_functions.html"><span class="std std-doc">Aggregate Functions</span></a> (<code class="docutils literal notranslate"><span class="pre">SUM</span></code>, <code class="docutils literal notranslate"><span class="pre">MEDIAN</span></code>, and many more)</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Schema Queries</p>
-<ul class="contains-task-list">
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox"><code class="docutils literal notranslate"><span class="pre">SHOW</span> <span class="pre">TABLES</span></code></p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox"><code class="docutils literal notranslate"><span class="pre">SHOW</span> <span class="pre">COLUMNS</span> <span class="pre">FROM</span> <span class="pre">&lt;table/view&gt;</span></code></p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox"><code class="docutils literal notranslate"><span class="pre">SHOW</span> <span class="pre">CREATE</span> <span class="pre">TABLE</span> <span class="pre">&lt;view&gt;</span></code></p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Basic SQL <a class="reference internal" href="sql/information_schema.html"><span class="std std-doc">Information Schema</span></a> (<code class="docutils literal notranslate"><span class="pre">TABLES</span></code>, <code class="docutils literal notranslate"><span class="pre">VIEWS</span></code>, <code class="docutils literal notranslate"><span class="pre">COLUMNS</span></code>)</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" disabled="disabled" type="checkbox">Full SQL <a class="reference internal" href="sql/information_schema.html"><span class="std std-doc">Information Schema</span></a> support</p></li>
-</ul>
-</li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Support for nested types (<code class="docutils literal notranslate"><span class="pre">ARRAY</span></code>/<code class="docutils literal notranslate"><span class="pre">LIST</span></code> and <code class="docutils literal notranslate"><span class="pre">STRUCT</span></code>.</p>
-<ul class="contains-task-list">
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Read support</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Write support</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Field access (<code class="docutils literal notranslate"><span class="pre">col['field']</span></code> and [<code class="docutils literal notranslate"><span class="pre">col[1]</span></code>])</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox"><a class="reference internal" href="sql/scalar_functions.html#array-functions"><span class="std std-ref">Array Functions</span></a></p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox"><a class="reference internal" href="sql/scalar_functions.html#struct-functions"><span class="std std-ref">Struct Functions</span></a></p>
-<ul class="contains-task-list">
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox"><code class="docutils literal notranslate"><span class="pre">struct</span></code></p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" disabled="disabled" type="checkbox"><a class="reference external" href="https://github.com/apache/datafusion/issues/6631">Postgres JSON operators</a> (<code class="docutils literal notranslate"><span class="pre">-&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">-&gt;&gt;</span></code>, etc.)</p></li>
-</ul>
-</li>
-</ul>
-</li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Subqueries</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Common Table Expressions (CTE)</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Set Operations (<code class="docutils literal notranslate"><span class="pre">UNION</span> <span class="pre">[ALL]</span></code>, <code class="docutils literal notranslate"><span class="pre">INTERSECT</span> <span class="pre">[ALL]</span></code>, <code class="docutils literal notranslate"><span class="pre">EXCEPT[ALL]</span></code>)</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Joins (<code class="docutils literal notranslate"><span class="pre">INNER</span></code>, <code class="docutils literal notranslate"><span class="pre">LEFT</span></code>, <code class="docutils literal notranslate"><span class="pre">RIGHT</span></code>, <code class="docutils literal notranslate"><span class="pre">FULL</span></code>, <code class="docutils literal notranslate"><span class="pre">CROSS</span></code>)</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Window Functions</p>
-<ul class="contains-task-list">
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Empty (<code class="docutils literal notranslate"><span class="pre">OVER()</span></code>)</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Partitioning and ordering: (<code class="docutils literal notranslate"><span class="pre">OVER(PARTITION</span> <span class="pre">BY</span> <span class="pre">&lt;..&gt;</span> <span class="pre">ORDER</span> <span class="pre">BY</span> <span class="pre">&lt;..&gt;)</span></code>)</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Custom Window (<code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span> <span class="pre">time</span> <span class="pre">ROWS</span> <span class="pre">BETWEEN</span> <span class="pre">2</span> <span class="pre">PRECEDING</span> <span class="pre">AND</span> <span class="pre">0</span> <span class="pre">FOLLOWING)</span></code>)</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">User Defined Window and Aggregate Functions</p></li>
-</ul>
-</li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Catalogs</p>
-<ul class="contains-task-list">
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Schemas (<code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">/</span> <span class="pre">DROP</span> <span class="pre">SCHEMA</span></code>)</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Tables (<code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">/</span> <span class="pre">DROP</span> <span class="pre">TABLE</span></code>, <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">TABLE</span> <span class="pre">AS</span> <span class="pre">SELECT</span></code>)</p></li>
-</ul>
-</li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Data Insert</p>
-<ul class="contains-task-list">
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox"><code class="docutils literal notranslate"><span class="pre">INSERT</span> <span class="pre">INTO</span></code></p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox"><code class="docutils literal notranslate"><span class="pre">COPY</span> <span class="pre">..</span> <span class="pre">INTO</span> <span class="pre">..</span></code></p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">CSV</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">JSON</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Parquet</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" disabled="disabled" type="checkbox">Avro</p></li>
-</ul>
-</li>
-</ul>
+<section id="enable-cdc-with-the-rust-api">
+<h2>Enable CDC with the Rust API<a class="headerlink" href="#enable-cdc-with-the-rust-api" title="Link to this heading">#</a></h2>
+<p>Pass <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/common/config/struct.TableParquetOptions.html"><code class="docutils literal notranslate"><span class="pre">TableParquetOptions</span></code></a> to <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.write_parquet"><code class="docutils literal notranslate"><span class="pre">DataFrame::write_parquet</span></code></a>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">config</span><span class="p">::{</span><span class="n">ParquetCdcOptions</span><span class="p">,</span><span class="w"> </span><span class="n">TableParquetOptions</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">dataframe</span><span class="p">::</span><span class="n">DataFrameWriteOptions</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="n">SessionContext</span><span class="p">;</span>
+
+<span class="cp">#[tokio::main]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span>
+<span class="w">        </span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="s">&quot;SELECT value AS id FROM generate_series(1, 100000)&quot;</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">parquet_options</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TableParquetOptions</span><span class="p">::</span><span class="n">default</span><span class="p">();</span>
+<span class="w">    </span><span class="n">parquet_options</span><span class="p">.</span><span class="n">global</span><span class="p">.</span><span class="n">content_defined_chunking</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ParquetCdcOptions</span><span class="p">::</span><span class="n">enabled</span><span class="p">();</span>
+
+<span class="w">    </span><span class="n">df</span><span class="p">.</span><span class="n">write_parquet</span><span class="p">(</span>
+<span class="w">        </span><span class="s">&quot;cdc-output.parquet&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">DataFrameWriteOptions</span><span class="p">::</span><span class="n">new</span><span class="p">().</span><span class="n">with_single_file_output</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+<span class="w">        </span><span class="nb">Some</span><span class="p">(</span><span class="n">parquet_options</span><span class="p">),</span>
+<span class="w">    </span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Set the fields of <code class="docutils literal notranslate"><span class="pre">ParquetCdcOptions</span></code> directly to use non-default chunk sizes or
+normalization.</p>
 </section>
-<section id="runtime">
-<h2>Runtime<a class="headerlink" href="#runtime" title="Link to this heading">#</a></h2>
-<ul class="contains-task-list simple">
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Streaming Grouping</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Streaming Window Evaluation</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Memory limits enforced</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Spilling (to disk) Sort</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Spilling (to disk) Grouping</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Spilling (to disk) Sort Merge Join</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" disabled="disabled" type="checkbox">Spilling (to disk) Hash Join</p></li>
-</ul>
-</section>
-<section id="data-sources">
-<h2>Data Sources<a class="headerlink" href="#data-sources" title="Link to this heading">#</a></h2>
-<p>In addition to allowing arbitrary datasources via the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html"><code class="docutils literal notranslate"><span class="pre">TableProvider</span></code></a>
-trait, DataFusion includes built in support for the following formats:</p>
-<ul class="contains-task-list simple">
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">CSV</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Parquet</p>
-<ul class="contains-task-list">
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Primitive and Nested Types</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Row Group and Data Page pruning on min/max statistics</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Row Group pruning on Bloom Filters</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Predicate push down (late materialization) <a class="reference external" href="https://github.com/apache/datafusion/issues/3463">not by default</a></p></li>
-</ul>
-</li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">JSON</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Avro</p></li>
-<li class="task-list-item"><p><input class="task-list-item-checkbox" checked="checked" disabled="disabled" type="checkbox">Arrow</p></li>
-</ul>
+<section id="tuning">
+<h2>Tuning<a class="headerlink" href="#tuning" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Option</p></th>
+<th class="head"><p>Default</p></th>
+<th class="head"><p>Effect</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">min_chunk_size</span></code></p></td>
+<td><p>256 KiB</p></td>
+<td><p>Minimum logical size before the rolling hash can select a boundary.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">max_chunk_size</span></code></p></td>
+<td><p>1 MiB</p></td>
+<td><p>Maximum logical size before the writer forces a boundary. It must be greater than <code class="docutils literal notranslate"><span class="pre">min_chunk_size</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">norm_level</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
+<td><p>Controls how aggressively boundaries are selected. Higher values can improve deduplication but create more small pages; recommended range is <code class="docutils literal notranslate"><span class="pre">-3</span></code> through <code class="docutils literal notranslate"><span class="pre">3</span></code>.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Chunk sizes are measured from logical column data before encoding and
+compression. Definition and repetition levels for nested data also count toward
+the size.</p>
+<p>Use the same CDC, encoding, compression, and schema settings when comparing
+dataset versions. Changing writer settings can change the page bytes and reduce
+deduplication even when the logical data is unchanged. Measure the deduplication
+ratio, output size, network transfer, and write time with representative data
+before changing the defaults.</p>
 </section>
 </section>
 
@@ -581,20 +601,20 @@ trait, DataFusion includes built in support for the following formats:</p>
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="example-usage.html"
+       href="explain-usage.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">Example Usage</p>
+        <p class="prev-next-title">Reading Explain Plans</p>
       </div>
     </a>
     <a class="right-next"
-       href="concepts-readings-events.html"
+       href="metrics.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Concepts, Readings, Events</p>
+        <p class="prev-next-title">Metrics</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -617,11 +637,10 @@ trait, DataFusion includes built in support for the following formats:</p>
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#general">General</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#optimizations">Optimizations</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sql-support">SQL Support</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#runtime">Runtime</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#data-sources">Data Sources</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#when-to-enable-cdc">When to enable CDC</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#enable-cdc-with-sql">Enable CDC with SQL</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#enable-cdc-with-the-rust-api">Enable CDC with the Rust API</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tuning">Tuning</a></li>
 </ul>
   </nav></div>
 
@@ -629,7 +648,7 @@ trait, DataFusion includes built in support for the following formats:</p>
 
   
   <div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/features.md">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/parquet-content-defined-chunking.md">
       <i class="fa-solid fa-pencil"></i>
       
       
@@ -644,7 +663,7 @@ trait, DataFusion includes built in support for the following formats:</p>
   <div class="sidebar-secondary-item">
 
   <div class="tocsection sourcelink">
-    <a href="../_sources/user-guide/features.md.txt">
+    <a href="../_sources/user-guide/parquet-content-defined-chunking.md.txt">
       <i class="fa-solid fa-file-lines"></i> Show Source
     </a>
   </div>
